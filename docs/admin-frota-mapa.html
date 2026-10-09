@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Odômetro Escolar — Mapa da Frota</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --azul: #1d4ed8; --verde: #16a34a; --amarelo: #d97706; --cinza: #9ca3af; --vermelho: #dc2626; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #f9fafb; color: #111827; }
+  header { background: var(--azul); color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 18px; }
+  .layout { display: flex; height: calc(100vh - 53px); }
+  #mapa { flex: 1; }
+  aside { width: 300px; overflow-y: auto; border-left: 1px solid #e5e7eb; background: #fff; }
+  .item { padding: 12px 16px; border-bottom: 1px solid #f3f4f6; cursor: pointer; }
+  .item:hover { background: #f9fafb; }
+  .item-top { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 14px; }
+  .item-sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot-live { background: var(--verde); }
+  .dot-warn { background: var(--amarelo); }
+  .dot-off { background: var(--cinza); }
+  #tela-login { max-width: 380px; margin: 60px auto; background: #fff; padding: 28px; border-radius: 12px; border: 1px solid #e5e7eb; }
+  #tela-login label { display: block; font-size: 13px; margin: 12px 0 4px; color: #374151; }
+  #tela-login input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; }
+  #tela-login button { width: 100%; margin-top: 16px; padding: 12px; border: none; border-radius: 8px; background: var(--azul); color: #fff; font-weight: 600; cursor: pointer; }
+  .erro { color: var(--vermelho); font-size: 13px; margin-top: 8px; }
+  .vazio { padding: 24px 16px; color: #6b7280; font-size: 14px; text-align: center; }
+  .oculto { display: none !important; }
+  .contador { background: rgba(255,255,255,.2); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div id="tela-login">
+  <h2 style="margin-top:0">Odômetro Escolar</h2>
+  <p style="color:#6b7280;font-size:14px">Mapa da frota — acesso da administração</p>
+  <label for="email">E-mail</label>
+  <input id="email" type="email" autocomplete="username" />
+  <label for="senha">Senha</label>
+  <input id="senha" type="password" autocomplete="current-password" />
+  <button id="btn-login">Entrar</button>
+  <div class="erro" id="erro-login"></div>
+</div>
+
+<div id="tela-principal" class="oculto">
+  <header>
+    <h1>Mapa da Frota — Tempo Real</h1>
+    <span class="contador" id="contador">0 veículos</span>
+  </header>
+  <div class="layout">
+    <div id="mapa"></div>
+    <aside id="lista"></aside>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://lkelzwpeopwnqubnflkt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_8uR0ZCyIkYQwUgErYl5NHw_rYnicoBj";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const LIMITE_AO_VIVO_MIN = 2;   // verde: atualizado há até 2 min
+const LIMITE_ATENCAO_MIN = 10;  // amarelo: até 10 min; acima disso = cinza (offline)
+
+let mapa, markers = {}; // veiculo_id -> L.Marker
+const el = (id) => document.getElementById(id);
+
+el("btn-login").addEventListener("click", async () => {
+  el("erro-login").textContent = "";
+  const email = el("email").value.trim();
+  const password = el("senha").value;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { el("erro-login").textContent = "Falha no login: " + error.message; return; }
+  await entrar(data.user.id);
+});
+
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) entrar(data.session.user.id);
+});
+
+async function entrar(userId) {
+  const { data: perfil, error } = await sb
+    .from("perfis")
+    .select("papel, nome_completo")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error || !perfil || !["administrador", "coordenador"].includes(perfil.papel)) {
+    el("erro-login").textContent = "Este usuário não tem acesso ao mapa da frota.";
+    await sb.auth.signOut();
+    return;
+  }
+
+  el("tela-login").classList.add("oculto");
+  el("tela-principal").classList.remove("oculto");
+
+  mapa = L.map("mapa").setView([-15.78, -47.93], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(mapa);
+
+  await carregarLocalizacoes();
+  assinarTempoReal();
+  setInterval(atualizarStatusVisual, 30000); // reavalia cores mesmo sem novo evento
+}
+
+async function carregarLocalizacoes() {
+  const { data, error } = await sb
+    .from("localizacoes_veiculo")
+    .select("*, veiculos(placa, modelo), motoristas(nome), rotas(nome, turno)");
+
+  if (error) {
+    el("lista").innerHTML = `<div class="vazio">Erro ao carregar: ${error.message}</div>`;
+    return;
+  }
+  if (!data || data.length === 0) {
+    el("lista").innerHTML = `<div class="vazio">Nenhum veículo compartilhando localização no momento.</div>`;
+    return;
+  }
+  data.forEach(upsertMarcador);
+  renderLista();
+  ajustarZoom();
+}
+
+function assinarTempoReal() {
+  sb.channel("frota-admin")
+    .on("postgres_changes", { event: "*", schema: "public", table: "localizacoes_veiculo" }, (payload) => {
+      if (payload.eventType === "DELETE") {
+        removerMarcador(payload.old.veiculo_id);
+      } else {
+        // Recarrega os dados relacionados (placa, motorista, rota) para o registro alterado
+        sb.from("localizacoes_veiculo")
+          .select("*, veiculos(placa, modelo), motoristas(nome), rotas(nome, turno)")
+          .eq("veiculo_id", payload.new.veiculo_id)
+          .maybeSingle()
+          .then(({ data }) => { if (data) { upsertMarcador(data); renderLista(); } });
+      }
+    })
+    .subscribe();
+}
+
+function statusDe(atualizadoEm, compartilhando) {
+  if (!compartilhando) return "off";
+  const minutos = (Date.now() - new Date(atualizadoEm).getTime()) / 60000;
+  if (minutos <= LIMITE_AO_VIVO_MIN) return "live";
+  if (minutos <= LIMITE_ATENCAO_MIN) return "warn";
+  return "off";
+}
+
+function corDe(status) {
+  return status === "live" ? "#16a34a" : status === "warn" ? "#d97706" : "#9ca3af";
+}
+
+function upsertMarcador(row) {
+  const status = statusDe(row.atualizado_em, row.compartilhando);
+  const cor = corDe(status);
+  const popup = montarPopup(row, status);
+
+  if (markers[row.veiculo_id]) {
+    markers[row.veiculo_id].marker.setLatLng([row.lat, row.lng]);
+    markers[row.veiculo_id].marker.setPopupContent(popup);
+    markers[row.veiculo_id].marker.setStyle?.({ fillColor: cor });
+    markers[row.veiculo_id].dado = row;
+  } else {
+    const marker = L.circleMarker([row.lat, row.lng], {
+      radius: 9, fillColor: cor, color: "#fff", weight: 2, fillOpacity: 1,
+    }).addTo(mapa).bindPopup(popup);
+    markers[row.veiculo_id] = { marker, dado: row };
+  }
+}
+
+function removerMarcador(veiculoId) {
+  if (markers[veiculoId]) {
+    mapa.removeLayer(markers[veiculoId].marker);
+    delete markers[veiculoId];
+    renderLista();
+  }
+}
+
+function montarPopup(row, status) {
+  const placa = row.veiculos?.placa ?? "—";
+  const motorista = row.motoristas?.nome ?? "—";
+  const rota = row.rotas?.nome ?? "sem rota";
+  const hora = new Date(row.atualizado_em).toLocaleTimeString("pt-BR");
+  const txtStatus = status === "live" ? "Ao vivo" : status === "warn" ? "Sinal atrasado" : "Offline";
+  return `<strong>${placa}</strong><br>Motorista: ${motorista}<br>Rota: ${rota}<br>${txtStatus} — ${hora}`;
+}
+
+function renderLista() {
+  const linhas = Object.values(markers).map(({ dado }) => {
+    const status = statusDe(dado.atualizado_em, dado.compartilhando);
+    const dotClass = status === "live" ? "dot-live" : status === "warn" ? "dot-warn" : "dot-off";
+    const placa = dado.veiculos?.placa ?? "—";
+    const motorista = dado.motoristas?.nome ?? "—";
+    const rota = dado.rotas?.nome ?? "sem rota";
+    const hora = new Date(dado.atualizado_em).toLocaleTimeString("pt-BR");
+    return `<div class="item" onclick="focarVeiculo('${dado.veiculo_id}')">
+      <div class="item-top"><span><span class="dot ${dotClass}"></span>${placa}</span><span>${hora}</span></div>
+      <div class="item-sub">${motorista} · ${rota}</div>
+    </div>`;
+  });
+  el("lista").innerHTML = linhas.join("") || `<div class="vazio">Nenhum veículo no momento.</div>`;
+  el("contador").textContent = `${linhas.length} veículo${linhas.length === 1 ? "" : "s"}`;
+}
+
+function atualizarStatusVisual() {
+  Object.values(markers).forEach(({ marker, dado }) => {
+    const status = statusDe(dado.atualizado_em, dado.compartilhando);
+    marker.setStyle({ fillColor: corDe(status) });
+    marker.setPopupContent(montarPopup(dado, status));
+  });
+  renderLista();
+}
+
+function ajustarZoom() {
+  const pontos = Object.values(markers).map(({ marker }) => marker.getLatLng());
+  if (pontos.length) mapa.fitBounds(L.latLngBounds(pontos), { padding: [40, 40] });
+}
+
+window.focarVeiculo = (veiculoId) => {
+  const m = markers[veiculoId];
+  if (m) { mapa.setView(m.marker.getLatLng(), 16); m.marker.openPopup(); }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Odômetro Escolar — Onde está o ônibus?</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --azul: #1d4ed8; --verde: #16a34a; --amarelo: #d97706; --cinza: #9ca3af; --vermelho: #dc2626; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #f3f4f6; color: #111827; }
+  .wrap { max-width: 480px; margin: 0 auto; min-height: 100vh; background: #fff; display: flex; flex-direction: column; }
+  header { background: var(--azul); color: #fff; padding: 16px 20px; }
+  header h1 { margin: 0; font-size: 18px; }
+  .content { padding: 20px; flex: 1; }
+  #tela-login label { display: block; font-size: 13px; margin: 12px 0 4px; color: #374151; }
+  #tela-login input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; }
+  #tela-login button { width: 100%; margin-top: 16px; padding: 12px; border: none; border-radius: 8px; background: var(--azul); color: #fff; font-weight: 600; cursor: pointer; }
+  .erro { color: var(--vermelho); font-size: 13px; margin-top: 8px; }
+  select { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; margin-bottom: 16px; }
+  .status-card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .status-linha { display: flex; justify-content: space-between; font-size: 14px; padding: 6px 0; border-bottom: 1px solid #f3f4f6; }
+  .status-linha:last-child { border-bottom: none; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot-live { background: var(--verde); }
+  .dot-warn { background: var(--amarelo); }
+  .dot-off { background: var(--cinza); }
+  #mapa { height: 320px; border-radius: 10px; }
+  .aviso { background: #fef3c7; color: #92400e; border-radius: 10px; padding: 14px; font-size: 14px; text-align: center; }
+  .oculto { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="tela-login" class="content">
+    <header style="margin: -20px -20px 20px; border-radius: 0;"><h1>Odômetro Escolar</h1></header>
+    <p style="color:#6b7280">Acompanhe em tempo real o transporte escolar do seu filho.</p>
+    <label for="email">E-mail</label>
+    <input id="email" type="email" autocomplete="username" />
+    <label for="senha">Senha</label>
+    <input id="senha" type="password" autocomplete="current-password" />
+    <button id="btn-login">Entrar</button>
+    <div class="erro" id="erro-login"></div>
+  </div>
+
+  <div id="tela-principal" class="oculto">
+    <header><h1 id="titulo-header">Onde está o ônibus?</h1></header>
+    <div class="content">
+      <select id="sel-filho" class="oculto"></select>
+
+      <div class="status-card">
+        <div class="status-linha"><span>Aluno</span><strong id="txt-aluno">—</strong></div>
+        <div class="status-linha"><span>Rota</span><strong id="txt-rota">—</strong></div>
+        <div class="status-linha"><span>Veículo</span><strong id="txt-veiculo">—</strong></div>
+        <div class="status-linha"><span>Motorista</span><strong id="txt-motorista">—</strong></div>
+        <div class="status-linha">
+          <span>Status</span>
+          <span class="badge"><span class="dot dot-off" id="dot-status"></span><span id="txt-status">—</span></span>
+        </div>
+        <div class="status-linha"><span>Última atualização</span><strong id="txt-hora">—</strong></div>
+      </div>
+
+      <div id="mapa"></div>
+      <div id="aviso-vazio" class="aviso oculto" style="margin-top:16px">O motorista ainda não iniciou o compartilhamento de localização hoje.</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const SUPABASE_URL = "https://lkelzwpeopwnqubnflkt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_8uR0ZCyIkYQwUgErYl5NHw_rYnicoBj";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const LIMITE_AO_VIVO_MIN = 2;
+const LIMITE_ATENCAO_MIN = 10;
+
+let filhos = [];       // [{ id, nome, rota_id, rotas: {...} }]
+let filhoAtual = null;
+let mapa, marcador;
+const el = (id) => document.getElementById(id);
+
+el("btn-login").addEventListener("click", async () => {
+  el("erro-login").textContent = "";
+  const email = el("email").value.trim();
+  const password = el("senha").value;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { el("erro-login").textContent = "Falha no login: " + error.message; return; }
+  await entrar(data.user.id);
+});
+
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) entrar(data.session.user.id);
+});
+
+async function entrar(userId) {
+  const { data: responsavel, error: e1 } = await sb
+    .from("responsaveis")
+    .select("id")
+    .eq("perfil_id", userId)
+    .maybeSingle();
+
+  if (e1 || !responsavel) {
+    el("erro-login").textContent = "Este usuário não está cadastrado como responsável.";
+    await sb.auth.signOut();
+    return;
+  }
+
+  const { data: alunos, error: e2 } = await sb
+    .from("alunos")
+    .select("id, nome, ativo, rotas(id, nome, turno, veiculos(id, placa, modelo, motorista_id))")
+    .eq("responsavel_id", responsavel.id)
+    .eq("ativo", true);
+
+  if (e2 || !alunos || alunos.length === 0) {
+    el("erro-login").textContent = "Nenhum aluno vinculado a este responsável.";
+    return;
+  }
+  filhos = alunos;
+
+  el("tela-login").classList.add("oculto");
+  el("tela-principal").classList.remove("oculto");
+
+  mapa = L.map("mapa").setView([-15.78, -47.93], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(mapa);
+
+  if (filhos.length > 1) {
+    const sel = el("sel-filho");
+    sel.classList.remove("oculto");
+    filhos.forEach(f => {
+      const opt = document.createElement("option");
+      opt.value = f.id;
+      opt.textContent = f.nome;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => selecionarFilho(sel.value));
+  }
+
+  selecionarFilho(filhos[0].id);
+  assinarTempoReal();
+  setInterval(() => { if (filhoAtual) carregarLocalizacao(); }, 30000);
+}
+
+async function selecionarFilho(alunoId) {
+  filhoAtual = filhos.find(f => f.id === alunoId);
+  el("txt-aluno").textContent = filhoAtual.nome;
+  el("txt-rota").textContent = filhoAtual.rotas?.nome ?? "—";
+  el("txt-veiculo").textContent = filhoAtual.rotas?.veiculos
+    ? `${filhoAtual.rotas.veiculos.placa}${filhoAtual.rotas.veiculos.modelo ? " — " + filhoAtual.rotas.veiculos.modelo : ""}`
+    : "Nenhum veículo vinculado à rota";
+
+  el("txt-motorista").textContent = "—";
+  const motoristaId = filhoAtual.rotas?.veiculos?.motorista_id;
+  if (motoristaId) {
+    // Usa a view "motoristas_publico" (nome/telefone apenas — sem CNH e outros dados
+    // sensíveis) porque responsáveis não têm permissão de leitura na tabela motoristas.
+    const { data: mot } = await sb
+      .from("motoristas_publico")
+      .select("nome")
+      .eq("id", motoristaId)
+      .maybeSingle();
+    el("txt-motorista").textContent = mot?.nome ?? "—";
+  }
+
+  carregarLocalizacao();
+}
+
+async function carregarLocalizacao() {
+  const veiculoId = filhoAtual?.rotas?.veiculos?.id;
+  if (!veiculoId) { mostrarVazio(); return; }
+
+  const { data, error } = await sb
+    .from("localizacoes_veiculo")
+    .select("*")
+    .eq("veiculo_id", veiculoId)
+    .maybeSingle();
+
+  if (error || !data) { mostrarVazio(); return; }
+  renderLocalizacao(data);
+}
+
+function mostrarVazio() {
+  el("aviso-vazio").classList.remove("oculto");
+  setStatus("off", "Sem dados");
+  el("txt-hora").textContent = "—";
+}
+
+function renderLocalizacao(row) {
+  el("aviso-vazio").classList.add("oculto");
+
+  const minutos = (Date.now() - new Date(row.atualizado_em).getTime()) / 60000;
+  let status, texto;
+  if (!row.compartilhando) { status = "off"; texto = "Compartilhamento pausado"; }
+  else if (minutos <= LIMITE_AO_VIVO_MIN) { status = "live"; texto = "Ao vivo"; }
+  else if (minutos <= LIMITE_ATENCAO_MIN) { status = "warn"; texto = "Sinal atrasado"; }
+  else { status = "off"; texto = "Offline"; }
+
+  setStatus(status, texto);
+  el("txt-hora").textContent = new Date(row.atualizado_em).toLocaleTimeString("pt-BR");
+
+  if (!mapa) return;
+  if (!marcador) {
+    marcador = L.marker([row.lat, row.lng]).addTo(mapa);
+  } else {
+    marcador.setLatLng([row.lat, row.lng]);
+  }
+  mapa.setView([row.lat, row.lng], 15);
+}
+
+function setStatus(status, texto) {
+  const cls = status === "live" ? "dot-live" : status === "warn" ? "dot-warn" : "dot-off";
+  el("dot-status").className = "dot " + cls;
+  el("txt-status").textContent = texto;
+}
+
+function assinarTempoReal() {
+  sb.channel("mapa-responsavel")
+    .on("postgres_changes", { event: "*", schema: "public", table: "localizacoes_veiculo" }, (payload) => {
+      const veiculoId = filhoAtual?.rotas?.veiculos?.id;
+      if (!veiculoId) return;
+      if (payload.eventType === "DELETE") { if (payload.old.veiculo_id === veiculoId) mostrarVazio(); return; }
+      if (payload.new.veiculo_id === veiculoId) renderLocalizacao(payload.new);
+    })
+    .subscribe();
+}
+</script>
+</body>
+</html>

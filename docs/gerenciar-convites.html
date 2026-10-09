@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Odômetro Escolar — Convites enviados</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --azul: #1d4ed8; --verde: #16a34a; --amarelo: #d97706; --cinza: #6b7280; --vermelho: #dc2626; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #f9fafb; color: #111827; }
+  header { background: var(--azul); color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 18px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+  #tela-login { max-width: 380px; margin: 60px auto; background: #fff; padding: 28px; border-radius: 12px; border: 1px solid #e5e7eb; }
+  #tela-login label { display: block; font-size: 13px; margin: 12px 0 4px; color: #374151; }
+  #tela-login input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; }
+  #tela-login button { width: 100%; margin-top: 16px; padding: 12px; border: none; border-radius: 8px; background: var(--azul); color: #fff; font-weight: 600; cursor: pointer; }
+  .erro { color: var(--vermelho); font-size: 13px; margin-top: 8px; }
+  .oculto { display: none !important; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .info b { font-size: 15px; }
+  .info .sub { font-size: 13px; color: #6b7280; margin-top: 2px; }
+  .badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .badge-pendente { background: #fef3c7; color: #92400e; }
+  .badge-usado { background: #e5e7eb; color: #374151; }
+  .badge-expirado { background: #fee2e2; color: #991b1b; }
+  .acoes { display: flex; gap: 8px; }
+  .btn { border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .btn-excluir { background: #fee2e2; color: #991b1b; }
+  .btn-excluir:hover { background: #fecaca; }
+  .btn-reenviar { background: #dbeafe; color: #1e40af; }
+  .btn-reenviar:hover { background: #bfdbfe; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .vazio { text-align: center; color: #6b7280; padding: 40px 0; }
+  .msg { font-size: 13px; margin-bottom: 16px; padding: 10px 14px; border-radius: 8px; }
+  .msg-ok { background: #f0fdf4; color: #166534; }
+  .msg-erro { background: #fee2e2; color: #991b1b; }
+  .filtros { display: flex; gap: 8px; margin-bottom: 16px; }
+  .filtro { border: 1px solid #d1d5db; background: #fff; border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+  .filtro.ativo { background: var(--azul); color: #fff; border-color: var(--azul); }
+</style>
+</head>
+<body>
+
+<div id="tela-login">
+  <h2 style="margin-top:0">Odômetro Escolar</h2>
+  <p style="color:#6b7280;font-size:14px">Convites enviados — acesso da administração</p>
+  <label for="email">E-mail</label>
+  <input id="email" type="email" autocomplete="username" />
+  <label for="senha">Senha</label>
+  <input id="senha" type="password" autocomplete="current-password" />
+  <button id="btn-login">Entrar</button>
+  <div class="erro" id="erro-login"></div>
+</div>
+
+<div id="tela-principal" class="oculto">
+  <header>
+    <h1>Convites enviados</h1>
+  </header>
+  <div class="wrap">
+    <div id="msg-area"></div>
+    <div class="filtros">
+      <button class="filtro ativo" data-filtro="todos">Todos</button>
+      <button class="filtro" data-filtro="pendente">Pendentes</button>
+      <button class="filtro" data-filtro="usado">Usados</button>
+      <button class="filtro" data-filtro="expirado">Expirados</button>
+    </div>
+    <div id="lista"></div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://lkelzwpeopwnqubnflkt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_8uR0ZCyIkYQwUgErYl5NHw_rYnicoBj";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const PAPEL_LEGIVEL = { administrador: "Administrador", coordenador: "Coordenador", funcionario: "Funcionário" };
+const el = (id) => document.getElementById(id);
+
+let convites = [];
+let filtroAtual = "todos";
+
+el("btn-login").addEventListener("click", async () => {
+  el("erro-login").textContent = "";
+  const email = el("email").value.trim();
+  const password = el("senha").value;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { el("erro-login").textContent = "Falha no login: " + error.message; return; }
+  await entrar(data.user.id);
+});
+
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) entrar(data.session.user.id);
+});
+
+async function entrar(userId) {
+  const { data: perfil, error } = await sb
+    .from("perfis")
+    .select("papel")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error || !perfil || !["administrador", "coordenador"].includes(perfil.papel)) {
+    el("erro-login").textContent = "Este usuário não tem acesso à gestão de convites.";
+    await sb.auth.signOut();
+    return;
+  }
+
+  el("tela-login").classList.add("oculto");
+  el("tela-principal").classList.remove("oculto");
+
+  document.querySelectorAll(".filtro").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filtro").forEach(b => b.classList.remove("ativo"));
+      btn.classList.add("ativo");
+      filtroAtual = btn.dataset.filtro;
+      renderLista();
+    });
+  });
+
+  await carregarConvites();
+}
+
+async function carregarConvites() {
+  const { data, error } = await sb
+    .from("convites")
+    .select("id, email, nome_completo, papel, cargo, criado_em, expira_em, usado, token")
+    .order("criado_em", { ascending: false });
+
+  if (error) {
+    el("lista").innerHTML = `<div class="vazio">Erro ao carregar convites: ${error.message}</div>`;
+    return;
+  }
+  convites = data || [];
+  renderLista();
+}
+
+function statusDe(c) {
+  if (c.usado) return "usado";
+  if (c.expira_em && new Date(c.expira_em) < new Date()) return "expirado";
+  return "pendente";
+}
+
+function renderLista() {
+  const filtrados = convites.filter(c => filtroAtual === "todos" || statusDe(c) === filtroAtual);
+
+  if (filtrados.length === 0) {
+    el("lista").innerHTML = `<div class="vazio">Nenhum convite ${filtroAtual === "todos" ? "" : "com esse status "}encontrado.</div>`;
+    return;
+  }
+
+  el("lista").innerHTML = filtrados.map(c => {
+    const status = statusDe(c);
+    const badgeClasse = status === "pendente" ? "badge-pendente" : status === "usado" ? "badge-usado" : "badge-expirado";
+    const badgeTexto = status === "pendente" ? "Pendente" : status === "usado" ? "Usado" : "Expirado";
+    const dataEnvio = new Date(c.criado_em).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+    return `
+      <div class="card" data-id="${c.id}">
+        <div class="info">
+          <b>${c.nome_completo || c.email}</b>
+          <span class="badge ${badgeClasse}">${badgeTexto}</span>
+          <div class="sub">${c.email} · ${PAPEL_LEGIVEL[c.papel] ?? c.papel}${c.cargo ? " · " + c.cargo : ""}</div>
+          <div class="sub">Enviado em ${dataEnvio}</div>
+        </div>
+        <div class="acoes">
+          ${status === "pendente" ? `<button class="btn btn-reenviar" onclick="copiarLink('${c.token}')">Copiar link</button>` : ""}
+          ${status === "pendente" ? `<button class="btn btn-reenviar" onclick="reenviar('${c.id}')">Reenviar</button>` : ""}
+          <button class="btn btn-excluir" onclick="excluir('${c.id}')">Excluir</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function mostrarMsg(texto, tipo) {
+  el("msg-area").innerHTML = `<div class="msg msg-${tipo}">${texto}</div>`;
+  setTimeout(() => { el("msg-area").innerHTML = ""; }, 5000);
+}
+
+window.excluir = async (id) => {
+  const convite = convites.find(c => c.id === id);
+  if (!convite) return;
+  const confirmado = confirm(`Excluir o convite de ${convite.nome_completo || convite.email}?\nEssa ação não pode ser desfeita.`);
+  if (!confirmado) return;
+
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if (card) card.querySelectorAll("button").forEach(b => b.disabled = true);
+
+  const { data, error } = await sb.from("convites").delete().eq("id", id).select("id");
+
+  if (error) {
+    mostrarMsg("Não foi possível excluir: " + error.message, "erro");
+    if (card) card.querySelectorAll("button").forEach(b => b.disabled = false);
+    return;
+  }
+
+  // Coordenador só pode excluir convites de papel "funcionario" (regra de RLS).
+  // Se a linha não veio de volta, é porque o banco bloqueou silenciosamente.
+  if (!data || data.length === 0) {
+    mostrarMsg("Você não tem permissão para excluir este convite (só administradores podem excluir convites de administrador/coordenador).", "erro");
+    if (card) card.querySelectorAll("button").forEach(b => b.disabled = false);
+    return;
+  }
+
+  convites = convites.filter(c => c.id !== id);
+  renderLista();
+  mostrarMsg("Convite excluído.", "ok");
+};
+
+window.copiarLink = async (token) => {
+  const link = new URL(`aceitar-convite.html?token=${token}`, location.href).href; // funciona no GitHub Pages (subpasta)
+  try {
+    await navigator.clipboard.writeText(link);
+    mostrarMsg("Link do convite copiado! Envie por WhatsApp, SMS ou como preferir.", "ok");
+  } catch {
+    prompt("Copie o link do convite:", link);
+  }
+};
+
+async function mensagemErroFuncao(error) {
+  if (!error) return "";
+  try {
+    const corpo = error.context && typeof error.context.json === "function" ? await error.context.json() : null;
+    if (corpo?.error) return corpo.error;
+  } catch {}
+  return error.message || "Erro desconhecido.";
+}
+
+window.reenviar = async (id) => {
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if (card) card.querySelectorAll("button").forEach(b => b.disabled = true);
+
+  const { error } = await sb.functions.invoke("enviar-convite", { body: { convite_id: id } });
+
+  if (card) card.querySelectorAll("button").forEach(b => b.disabled = false);
+
+  if (error) {
+    mostrarMsg("Não foi possível reenviar: " + (await mensagemErroFuncao(error)), "erro");
+    return;
+  }
+  mostrarMsg("Convite reenviado por e-mail.", "ok");
+};
+</script>
+</body>
+</html>

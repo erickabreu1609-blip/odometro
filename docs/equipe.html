@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Odômetro Escolar — Equipe</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --card: #12151d;
+    --card-2: #171b25;
+    --borda: #262b38;
+    --texto: #e5e7eb;
+    --texto-sub: #8b93a7;
+    --dourado: #f2b705;
+    --dourado-escuro: #caa106;
+    --vermelho-bg: #3a1d1f; --vermelho-txt: #f27272;
+    --laranja-bg: #3a2c14; --laranja-txt: #f2b74a;
+    --azul-bg: #172236; --azul-txt: #6ea3f2;
+    --verde-bg: #14301f; --verde-txt: #4ade80;
+    --cinza-bg: #232733; --cinza-txt: #9aa2b5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--texto); }
+
+  /* ---------- LOGIN ---------- */
+  #tela-login { max-width: 380px; margin: 60px auto; background: var(--card); padding: 28px; border-radius: 14px; border: 1px solid var(--borda); }
+  #tela-login h2 { margin-top: 0; }
+  #tela-login label { display: block; font-size: 13px; margin: 12px 0 4px; color: var(--texto-sub); }
+  #tela-login input { width: 100%; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 8px; font-size: 15px; background: var(--card-2); color: var(--texto); }
+  #tela-login button { width: 100%; margin-top: 16px; padding: 12px; border: none; border-radius: 8px; background: var(--dourado); color: #1a1400; font-weight: 700; cursor: pointer; }
+  .erro { color: var(--vermelho-txt); font-size: 13px; margin-top: 8px; }
+  .oculto { display: none !important; }
+
+  /* ---------- HEADER ---------- */
+  header { padding: 28px 32px 20px; border-bottom: 3px solid var(--dourado); }
+  header h1 { margin: 0; font-size: 28px; font-weight: 800; }
+  header p { margin: 4px 0 0; color: var(--texto-sub); font-size: 14px; }
+
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  .secao-topo { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .secao-titulo { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; letter-spacing: .04em; color: var(--texto-sub); text-transform: uppercase; }
+  .secao-titulo .barra { width: 4px; height: 16px; background: var(--dourado); border-radius: 2px; }
+
+  .btn-convidar { background: var(--dourado); color: #1a1400; border: none; border-radius: 8px; padding: 10px 18px; font-weight: 700; font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .btn-convidar:hover { background: var(--dourado-escuro); }
+
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--borda); border-radius: 12px; overflow: hidden; }
+  thead th { text-align: left; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--texto-sub); padding: 14px 16px; border-bottom: 1px solid var(--borda); }
+  tbody td { padding: 14px 16px; border-bottom: 1px solid var(--borda); font-size: 14px; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card-2); }
+  .nome { font-weight: 600; }
+
+  .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .badge-administrador { background: var(--vermelho-bg); color: var(--vermelho-txt); }
+  .badge-coordenador { background: var(--laranja-bg); color: var(--laranja-txt); }
+  .badge-funcionario { background: var(--azul-bg); color: var(--azul-txt); }
+  .badge-ativo { background: var(--verde-bg); color: var(--verde-txt); }
+  .badge-inativo { background: var(--cinza-bg); color: var(--cinza-txt); }
+  .badge-pendente { background: var(--laranja-bg); color: var(--laranja-txt); }
+  .badge-expirado { background: var(--vermelho-bg); color: var(--vermelho-txt); }
+
+  .acoes-linha { display: flex; gap: 10px; justify-content: flex-end; }
+  .icone-btn { background: none; border: none; color: var(--texto-sub); cursor: pointer; font-size: 16px; padding: 4px; border-radius: 6px; }
+  .icone-btn:hover { color: var(--texto); background: var(--card-2); }
+  .icone-btn.excluir:hover { color: var(--vermelho-txt); }
+  .icone-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  .vazio-linha td { text-align: center; color: var(--texto-sub); padding: 28px; }
+  .mt { margin-top: 32px; }
+
+  .msg { font-size: 13px; margin-bottom: 16px; padding: 10px 14px; border-radius: 8px; }
+  .msg-ok { background: var(--verde-bg); color: var(--verde-txt); }
+  .msg-erro { background: var(--vermelho-bg); color: var(--vermelho-txt); }
+
+  /* ---------- MODAL CONVIDAR ---------- */
+  .modal-fundo { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+  .modal { background: var(--card); border: 1px solid var(--borda); border-radius: 14px; padding: 28px; max-width: 420px; width: 100%; }
+  .modal h3 { margin: 0 0 18px; }
+  .modal label { display: block; font-size: 13px; color: var(--texto-sub); margin: 12px 0 4px; }
+  .modal input, .modal select { width: 100%; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 8px; font-size: 14px; background: var(--card-2); color: var(--texto); }
+  .modal-acoes { display: flex; gap: 10px; margin-top: 20px; }
+  .btn-cancelar { flex: 1; background: var(--card-2); color: var(--texto); border: 1px solid var(--borda); border-radius: 8px; padding: 10px; font-weight: 600; cursor: pointer; }
+  .btn-enviar { flex: 1; background: var(--dourado); color: #1a1400; border: none; border-radius: 8px; padding: 10px; font-weight: 700; cursor: pointer; }
+  .btn-enviar:disabled { opacity: .6; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<div id="tela-login">
+  <h2>Odômetro Escolar</h2>
+  <p style="color:var(--texto-sub);font-size:14px">Equipe — acesso da administração</p>
+  <label for="email">E-mail</label>
+  <input id="email" type="email" autocomplete="username" />
+  <label for="senha">Senha</label>
+  <input id="senha" type="password" autocomplete="current-password" />
+  <button id="btn-login">Entrar</button>
+  <div class="erro" id="erro-login"></div>
+</div>
+
+<div id="tela-principal" class="oculto">
+  <header>
+    <h1>Equipe</h1>
+    <p>Administradores, coordenadores e funcionários</p>
+  </header>
+
+  <div class="wrap">
+    <div id="msg-area"></div>
+
+    <div class="secao-topo">
+      <div class="secao-titulo"><span class="barra"></span>PESSOAS COM ACESSO AO SISTEMA</div>
+      <button class="btn-convidar" id="btn-abrir-modal">➕ Convidar</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Nome</th><th>Papel</th><th>Cargo</th><th>Salário</th><th>Telefone</th><th>Situação</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="corpo-equipe"><tr class="vazio-linha"><td colspan="7">Carregando…</td></tr></tbody>
+    </table>
+
+    <div class="secao-topo mt">
+      <div class="secao-titulo"><span class="barra"></span>CONVITES ENVIADOS</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Nome</th><th>Papel</th><th>Cargo</th><th>Salário</th><th>Telefone</th><th>Situação</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="corpo-convites"><tr class="vazio-linha"><td colspan="7">Carregando…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- MODAL: Convidar -->
+<div id="modal-convidar" class="modal-fundo oculto">
+  <div class="modal">
+    <h3>Convidar pessoa</h3>
+    <label for="m-nome">Nome completo</label>
+    <input id="m-nome" />
+    <label for="m-email">E-mail</label>
+    <input id="m-email" type="email" />
+    <label for="m-papel">Papel</label>
+    <select id="m-papel">
+      <option value="funcionario">Funcionário</option>
+      <option value="coordenador">Coordenador</option>
+      <option value="administrador">Administrador</option>
+    </select>
+    <label for="m-cargo">Cargo</label>
+    <input id="m-cargo" placeholder="ex.: Secretária, CEO..." />
+    <label for="m-salario">Salário (opcional)</label>
+    <input id="m-salario" type="number" step="0.01" placeholder="0,00" />
+    <label for="m-telefone">Telefone</label>
+    <input id="m-telefone" placeholder="(00) 00000-0000" />
+    <div class="erro" id="erro-modal"></div>
+    <div class="modal-acoes">
+      <button class="btn-cancelar" id="btn-cancelar-modal">Cancelar</button>
+      <button class="btn-enviar" id="btn-enviar-convite">Enviar convite</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://lkelzwpeopwnqubnflkt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_8uR0ZCyIkYQwUgErYl5NHw_rYnicoBj";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const PAPEL_LEGIVEL = { administrador: "Administrador", coordenador: "Coordenador", funcionario: "Funcionário" };
+const el = (id) => document.getElementById(id);
+
+let meuPapel = null;
+let equipe = [];
+let convites = [];
+
+el("btn-login").addEventListener("click", async () => {
+  el("erro-login").textContent = "";
+  const email = el("email").value.trim();
+  const password = el("senha").value;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { el("erro-login").textContent = "Falha no login: " + error.message; return; }
+  await entrar(data.user.id);
+});
+
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) entrar(data.session.user.id);
+});
+
+async function entrar(userId) {
+  const { data: perfil, error } = await sb.from("perfis").select("papel").eq("id", userId).maybeSingle();
+
+  if (error || !perfil || !["administrador", "coordenador"].includes(perfil.papel)) {
+    el("erro-login").textContent = "Este usuário não tem acesso à tela de Equipe.";
+    await sb.auth.signOut();
+    return;
+  }
+  meuPapel = perfil.papel;
+
+  el("tela-login").classList.add("oculto");
+  el("tela-principal").classList.remove("oculto");
+
+  // coordenador só pode convidar (e o RLS só deixa excluir convite de) papel "funcionario"
+  if (meuPapel === "coordenador") {
+    const sel = el("m-papel");
+    [...sel.options].forEach(o => { if (o.value !== "funcionario") o.disabled = true; });
+  }
+
+  el("btn-abrir-modal").addEventListener("click", () => el("modal-convidar").classList.remove("oculto"));
+  el("btn-cancelar-modal").addEventListener("click", fecharModal);
+  el("btn-enviar-convite").addEventListener("click", enviarConvite);
+
+  await Promise.all([carregarEquipe(), carregarConvites()]);
+}
+
+function fecharModal() {
+  el("modal-convidar").classList.add("oculto");
+  el("erro-modal").textContent = "";
+  ["m-nome","m-email","m-cargo","m-salario","m-telefone"].forEach(id => el(id).value = "");
+}
+
+function mostrarMsg(texto, tipo) {
+  el("msg-area").innerHTML = `<div class="msg msg-${tipo}">${texto}</div>`;
+  setTimeout(() => { el("msg-area").innerHTML = ""; }, 5000);
+}
+
+function formatarSalario(v) {
+  if (v === null || v === undefined) return "—";
+  return "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+}
+
+// ---------- EQUIPE ATUAL ----------
+async function carregarEquipe() {
+  const { data, error } = await sb
+    .from("perfis")
+    .select("id, nome_completo, papel, cargo, salario, telefone, ativo")
+    .order("nome_completo");
+
+  if (error) {
+    el("corpo-equipe").innerHTML = `<tr class="vazio-linha"><td colspan="7">Erro: ${error.message}</td></tr>`;
+    return;
+  }
+  equipe = data || [];
+  renderEquipe();
+}
+
+function renderEquipe() {
+  if (equipe.length === 0) {
+    el("corpo-equipe").innerHTML = `<tr class="vazio-linha"><td colspan="7">Ninguém cadastrado ainda.</td></tr>`;
+    return;
+  }
+  el("corpo-equipe").innerHTML = equipe.map(p => `
+    <tr>
+      <td class="nome">${p.nome_completo}</td>
+      <td><span class="badge badge-${p.papel}">${PAPEL_LEGIVEL[p.papel] ?? p.papel}</span></td>
+      <td>${p.cargo ?? "—"}</td>
+      <td>${formatarSalario(p.salario)}</td>
+      <td>${p.telefone ?? "—"}</td>
+      <td><span class="badge ${p.ativo ? "badge-ativo" : "badge-inativo"}">${p.ativo ? "ativo" : "inativo"}</span></td>
+      <td></td>
+    </tr>`).join("");
+}
+
+// ---------- CONVITES ENVIADOS ----------
+async function carregarConvites() {
+  const { data, error } = await sb
+    .from("convites")
+    .select("id, email, nome_completo, papel, cargo, salario, telefone, criado_em, expira_em, usado")
+    .order("criado_em", { ascending: false });
+
+  if (error) {
+    el("corpo-convites").innerHTML = `<tr class="vazio-linha"><td colspan="7">Erro: ${error.message}</td></tr>`;
+    return;
+  }
+  // convite "usado" já virou uma linha em perfis (equipe) — não repete aqui
+  convites = (data || []).filter(c => !c.usado);
+  renderConvites();
+}
+
+function statusConvite(c) {
+  if (c.expira_em && new Date(c.expira_em) < new Date()) return "expirado";
+  return "pendente";
+}
+
+function renderConvites() {
+  if (convites.length === 0) {
+    el("corpo-convites").innerHTML = `<tr class="vazio-linha"><td colspan="7">Nenhum convite pendente.</td></tr>`;
+    return;
+  }
+  el("corpo-convites").innerHTML = convites.map(c => {
+    const status = statusConvite(c);
+    const podeExcluir = meuPapel === "administrador"; // pedido: só admin exclui convite
+    return `
+      <tr data-id="${c.id}">
+        <td class="nome">${c.nome_completo || c.email}</td>
+        <td><span class="badge badge-${c.papel}">${PAPEL_LEGIVEL[c.papel] ?? c.papel}</span></td>
+        <td>${c.cargo ?? "—"}</td>
+        <td>${formatarSalario(c.salario)}</td>
+        <td>${c.telefone ?? "—"}</td>
+        <td><span class="badge ${status === "pendente" ? "badge-pendente" : "badge-expirado"}">${status === "pendente" ? "Convite pendente" : "Convite expirado"}</span></td>
+        <td>
+          <div class="acoes-linha">
+            ${status === "pendente" ? `<button class="icone-btn" title="Reenviar e-mail" onclick="reenviar('${c.id}')">✉️</button>` : ""}
+            <button class="icone-btn excluir" title="Excluir convite" onclick="excluirConvite('${c.id}')" ${podeExcluir ? "" : "disabled"}>🗑️</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+}
+
+window.excluirConvite = async (id) => {
+  if (meuPapel !== "administrador") {
+    mostrarMsg("Só o Administrador pode excluir convites.", "erro");
+    return;
+  }
+  const convite = convites.find(c => c.id === id);
+  if (!convite) return;
+  if (!confirm(`Excluir o convite de ${convite.nome_completo || convite.email}?`)) return;
+
+  const linha = document.querySelector(`tr[data-id="${id}"]`);
+  if (linha) linha.querySelectorAll("button").forEach(b => b.disabled = true);
+
+  const { data, error } = await sb.from("convites").delete().eq("id", id).select("id");
+
+  if (error || !data || data.length === 0) {
+    mostrarMsg(error ? "Não foi possível excluir: " + error.message : "Você não tem permissão para excluir este convite.", "erro");
+    if (linha) linha.querySelectorAll("button").forEach(b => b.disabled = false);
+    return;
+  }
+
+  convites = convites.filter(c => c.id !== id);
+  renderConvites();
+  mostrarMsg("Convite excluído.", "ok");
+};
+
+window.reenviar = async (id) => {
+  const linha = document.querySelector(`tr[data-id="${id}"]`);
+  if (linha) linha.querySelectorAll("button").forEach(b => b.disabled = true);
+
+  const { error } = await sb.functions.invoke("enviar-convite", { body: { convite_id: id } });
+
+  if (linha) linha.querySelectorAll("button").forEach(b => b.disabled = false);
+  mostrarMsg(error ? "Não foi possível reenviar: " + error.message : "Convite reenviado por e-mail.", error ? "erro" : "ok");
+};
+
+// ---------- ENVIAR NOVO CONVITE ----------
+async function enviarConvite() {
+  el("erro-modal").textContent = "";
+  const nome_completo = el("m-nome").value.trim();
+  const email = el("m-email").value.trim();
+  const papel = el("m-papel").value;
+  const cargo = el("m-cargo").value.trim() || null;
+  const salario = el("m-salario").value ? Number(el("m-salario").value) : null;
+  const telefone = el("m-telefone").value.trim() || null;
+
+  if (!nome_completo || !email) { el("erro-modal").textContent = "Nome e e-mail são obrigatórios."; return; }
+
+  el("btn-enviar-convite").disabled = true;
+
+  const { data: convite, error } = await sb
+    .from("convites")
+    .insert({ nome_completo, email, papel, cargo, salario, telefone })
+    .select("id")
+    .single();
+
+  if (error) {
+    el("erro-modal").textContent = "Falha ao criar convite: " + error.message;
+    el("btn-enviar-convite").disabled = false;
+    return;
+  }
+
+  const { error: erroEnvio } = await sb.functions.invoke("enviar-convite", { body: { convite_id: convite.id } });
+
+  el("btn-enviar-convite").disabled = false;
+  fecharModal();
+
+  if (erroEnvio) {
+    mostrarMsg("Convite criado, mas o e-mail não pôde ser enviado: " + erroEnvio.message, "erro");
+  } else {
+    mostrarMsg("Convite enviado com sucesso.", "ok");
+  }
+  await carregarConvites();
+}
+</script>
+</body>
+</html>

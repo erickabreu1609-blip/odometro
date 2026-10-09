@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Odômetro Escolar — Compartilhar Localização</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --azul: #1d4ed8; --verde: #16a34a; --vermelho: #dc2626; --cinza: #6b7280; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #f3f4f6; color: #111827; }
+  .wrap { max-width: 480px; margin: 0 auto; min-height: 100vh; background: #fff; display: flex; flex-direction: column; }
+  header { background: var(--azul); color: #fff; padding: 16px 20px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 2px 0 0; font-size: 13px; opacity: .85; }
+  .content { padding: 20px; flex: 1; }
+  label { display: block; font-size: 13px; color: #374151; margin: 12px 0 4px; }
+  input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; }
+  button { cursor: pointer; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; padding: 12px 16px; width: 100%; margin-top: 16px; }
+  .btn-primary { background: var(--azul); color: #fff; }
+  .btn-start { background: var(--verde); color: #fff; }
+  .btn-stop { background: var(--vermelho); color: #fff; }
+  .btn-primary:disabled, .btn-start:disabled { opacity: .6; cursor: not-allowed; }
+  .erro { color: var(--vermelho); font-size: 13px; margin-top: 8px; min-height: 16px; }
+  .status-card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-top: 16px; }
+  .status-linha { display: flex; justify-content: space-between; font-size: 14px; padding: 6px 0; border-bottom: 1px solid #f3f4f6; }
+  .status-linha:last-child { border-bottom: none; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot-on { background: var(--verde); box-shadow: 0 0 0 4px rgba(22,163,74,.15); }
+  .dot-off { background: var(--cinza); }
+  #mapa { height: 220px; border-radius: 10px; margin-top: 16px; }
+  select { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; margin-top: 4px; }
+  .rodape { font-size: 11px; color: #9ca3af; text-align: center; padding: 12px; }
+  .oculto { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Odômetro Escolar</h1>
+    <p>Compartilhamento de localização — Motorista</p>
+  </header>
+
+  <div class="content">
+
+    <!-- TELA DE LOGIN -->
+    <div id="tela-login">
+      <label for="email">E-mail</label>
+      <input id="email" type="email" autocomplete="username" placeholder="seu@email.com" />
+      <label for="senha">Senha</label>
+      <input id="senha" type="password" autocomplete="current-password" placeholder="••••••••" />
+      <button class="btn-primary" id="btn-login">Entrar</button>
+      <div class="erro" id="erro-login"></div>
+    </div>
+
+    <!-- TELA PRINCIPAL (pós-login) -->
+    <div id="tela-principal" class="oculto">
+      <div class="status-card">
+        <div class="status-linha"><span>Motorista</span><strong id="txt-motorista">—</strong></div>
+        <div class="status-linha"><span>Veículo</span><strong id="txt-veiculo">—</strong></div>
+        <div class="status-linha"><span>Rota</span>
+          <select id="sel-rota"><option value="">(sem rota selecionada)</option></select>
+        </div>
+      </div>
+
+      <div class="status-card">
+        <div class="status-linha">
+          <span>Status</span>
+          <span class="badge" id="badge-status"><span class="dot dot-off" id="dot-status"></span><span id="txt-status">Parado</span></span>
+        </div>
+        <div class="status-linha"><span>Última atualização</span><strong id="txt-hora">—</strong></div>
+        <div class="status-linha"><span>Precisão GPS</span><strong id="txt-precisao">—</strong></div>
+      </div>
+
+      <div id="mapa"></div>
+
+      <button class="btn-start" id="btn-iniciar">Iniciar compartilhamento</button>
+      <button class="btn-stop oculto" id="btn-parar">Parar compartilhamento</button>
+      <div class="erro" id="erro-geo"></div>
+    </div>
+
+  </div>
+  <div class="rodape">Mantenha esta página aberta durante o trajeto para que os responsáveis e a administração vejam a localização em tempo real.</div>
+</div>
+
+<script>
+/*
+  ==========================================================================
+  CONFIGURAÇÃO
+  Estas credenciais são públicas (chave "publishable"/anon) e seguras para
+  uso no cliente — a segurança real é garantida pelas políticas de RLS já
+  configuradas na tabela public.localizacoes_veiculo.
+  ==========================================================================
+*/
+const SUPABASE_URL = "https://lkelzwpeopwnqubnflkt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_8uR0ZCyIkYQwUgErYl5NHw_rYnicoBj";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const INTERVALO_MIN_MS = 8000; // não envia atualização com menos de 8s de intervalo (poupa bateria/dados)
+
+let motorista = null;   // linha de public.motoristas do usuário logado
+let veiculo = null;     // veículo vinculado ao motorista
+let rotaSelecionada = "";
+let watchId = null;
+let ultimoEnvio = 0;
+let mapa, marcador;
+
+const el = (id) => document.getElementById(id);
+
+// ---------- LOGIN ----------
+el("btn-login").addEventListener("click", async () => {
+  el("erro-login").textContent = "";
+  const email = el("email").value.trim();
+  const password = el("senha").value;
+  if (!email || !password) { el("erro-login").textContent = "Informe e-mail e senha."; return; }
+
+  el("btn-login").disabled = true;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  el("btn-login").disabled = false;
+
+  if (error) { el("erro-login").textContent = "Falha no login: " + error.message; return; }
+  await carregarMotorista(data.user.id);
+});
+
+// Se já houver sessão ativa (ex.: página reaberta), pula o login
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) carregarMotorista(data.session.user.id);
+});
+
+async function carregarMotorista(userId) {
+  const { data: mot, error: e1 } = await sb
+    .from("motoristas")
+    .select("id, nome, empresa_id")
+    .eq("perfil_id", userId)
+    .maybeSingle();
+
+  if (e1 || !mot) {
+    el("erro-login").textContent = "Este usuário não está cadastrado como motorista.";
+    await sb.auth.signOut();
+    return;
+  }
+  motorista = mot;
+
+  const { data: veic } = await sb
+    .from("veiculos")
+    .select("id, placa, modelo")
+    .eq("motorista_id", motorista.id)
+    .eq("ativo", true)
+    .limit(1)
+    .maybeSingle();
+
+  if (!veic) {
+    el("erro-login").textContent = "Nenhum veículo está vinculado a este motorista.";
+    return;
+  }
+  veiculo = veic;
+
+  const { data: rotas } = await sb
+    .from("rotas")
+    .select("id, nome, turno")
+    .eq("veiculo_id", veiculo.id);
+
+  const sel = el("sel-rota");
+  (rotas || []).forEach(r => {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = `${r.nome} (${r.turno})`;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener("change", () => { rotaSelecionada = sel.value; });
+
+  el("txt-motorista").textContent = motorista.nome;
+  el("txt-veiculo").textContent = `${veic.placa}${veic.modelo ? " — " + veic.modelo : ""}`;
+
+  el("tela-login").classList.add("oculto");
+  el("tela-principal").classList.remove("oculto");
+
+  mapa = L.map("mapa").setView([-15.78, -47.93], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(mapa);
+}
+
+// ---------- COMPARTILHAMENTO DE LOCALIZAÇÃO ----------
+el("btn-iniciar").addEventListener("click", iniciarCompartilhamento);
+el("btn-parar").addEventListener("click", pararCompartilhamento);
+
+function iniciarCompartilhamento() {
+  if (!navigator.geolocation) {
+    el("erro-geo").textContent = "Este dispositivo/navegador não suporta geolocalização.";
+    return;
+  }
+  el("erro-geo").textContent = "";
+  el("btn-iniciar").classList.add("oculto");
+  el("btn-parar").classList.remove("oculto");
+  setStatus(true);
+
+  watchId = navigator.geolocation.watchPosition(onPosicao, onErroGeo, {
+    enableHighAccuracy: true,
+    maximumAge: 5000,
+    timeout: 15000,
+  });
+}
+
+async function pararCompartilhamento() {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = null;
+  el("btn-parar").classList.add("oculto");
+  el("btn-iniciar").classList.remove("oculto");
+  setStatus(false);
+
+  // Marca como "não compartilhando" para sumir do mapa de responsáveis/admin
+  await sb.from("localizacoes_veiculo").update({ compartilhando: false }).eq("veiculo_id", veiculo.id);
+}
+
+function onErroGeo(err) {
+  el("erro-geo").textContent = "Erro de localização: " + err.message;
+}
+
+async function onPosicao(pos) {
+  const agora = Date.now();
+  const { latitude, longitude, accuracy } = pos.coords;
+
+  atualizarMapaLocal(latitude, longitude);
+  el("txt-precisao").textContent = Math.round(accuracy) + " m";
+
+  if (agora - ultimoEnvio < INTERVALO_MIN_MS) return; // limita frequência de envio
+  ultimoEnvio = agora;
+
+  const { error } = await sb.from("localizacoes_veiculo").upsert({
+    veiculo_id: veiculo.id,
+    empresa_id: motorista.empresa_id,
+    motorista_id: motorista.id,
+    rota_id: rotaSelecionada || null,
+    lat: latitude,
+    lng: longitude,
+    precisao: accuracy,
+    compartilhando: true,
+    atualizado_em: new Date().toISOString(),
+  }, { onConflict: "veiculo_id" });
+
+  if (error) {
+    el("erro-geo").textContent = "Falha ao enviar localização: " + error.message;
+  } else {
+    el("txt-hora").textContent = new Date().toLocaleTimeString("pt-BR");
+  }
+}
+
+function atualizarMapaLocal(lat, lng) {
+  if (!mapa) return;
+  if (!marcador) {
+    marcador = L.marker([lat, lng]).addTo(mapa);
+    mapa.setView([lat, lng], 15);
+  } else {
+    marcador.setLatLng([lat, lng]);
+  }
+}
+
+function setStatus(ativo) {
+  el("dot-status").className = "dot " + (ativo ? "dot-on" : "dot-off");
+  el("txt-status").textContent = ativo ? "Compartilhando" : "Parado";
+}
+
+// Observação: não é possível garantir uma chamada autenticada no evento
+// "beforeunload" (sendBeacon só faz POST simples, sem os headers de auth
+// exigidos pelo RLS). Por isso, quem exibe o mapa (admin/responsável) deve
+// tratar "atualizado_em" com mais de alguns minutos como veículo offline —
+// isso já está implementado nos painéis de admin e responsável.
+</script>
+</body>
+</html>
