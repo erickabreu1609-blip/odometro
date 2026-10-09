@@ -1,0 +1,25 @@
+# Arquivos de trabalho / antigos que não precisam ir para o GitHub
+*.zip
+_extracted.js
+_gc.js
+*.log
+
+# App: dependências e builds (são recriados com "npm install")
+node_modules/
+app-mobile/.expo/
+app-mobile/dist/
+app-mobile/dist-*/
+app-mobile/android/
+app-mobile/ios/
+
+# Nunca enviar segredos
+.env
+.env.*
+!.env.example
+google-services.json
+GoogleService-Info.plist
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
