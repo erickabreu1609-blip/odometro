@@ -42,8 +42,9 @@
       Você foi convidado por <b id="txt-empresa"></b> para acessar como <b id="txt-papel"></b>.
     </div>
 
-    <label>E-mail</label>
-    <input id="email" disabled />
+    <label for="email">Seu e-mail</label>
+    <input id="email" type="email" autocomplete="email" inputmode="email" placeholder="seuemail@exemplo.com" />
+    <div class="dica">Pode trocar pelo e-mail que você usa. Se você já tem conta no Odômetro, use o mesmo e-mail e a sua senha atual — o novo acesso é somado à sua conta.</div>
 
     <label for="senha">Crie uma senha</label>
     <input id="senha" type="password" autocomplete="new-password" placeholder="mínimo 8 caracteres" />
@@ -53,6 +54,20 @@
 
     <button id="btn-confirmar">Criar acesso</button>
     <div class="erro" id="erro-form"></div>
+  </div>
+
+  <div id="login-area" class="oculto">
+    <div class="resumo">Este e-mail já tem conta no Odômetro. Entre com a sua senha para somar o novo acesso à sua conta.</div>
+    <label for="senha-login">Senha atual</label>
+    <input id="senha-login" type="password" autocomplete="current-password" />
+    <button id="btn-entrar">Entrar e aceitar o convite</button>
+    <div class="erro" id="erro-login"></div>
+  </div>
+
+  <div id="vinculado" class="oculto">
+    <div class="ok">
+      Pronto! O acesso foi somado à sua conta. Abra o app Odômetro e, ao entrar, escolha o perfil que quer usar.
+    </div>
   </div>
 
   <div id="sucesso" class="oculto">
@@ -87,10 +102,11 @@ let conviteEmail = "";
   if (error || !convite) return mostrarInvalido("Não foi possível validar este convite.");
   if (!convite.valido) return mostrarInvalido("Este convite já foi usado ou expirou. Peça para o administrador enviar um novo.");
 
-  conviteEmail = convite.email;
+  // Convites de motorista usam um e-mail interno (matrícula@empresa.vans.local): não mostra esse.
+  conviteEmail = /\.vans\.local$/i.test(convite.email || "") ? "" : convite.email;
   el("txt-empresa").textContent = convite.empresa_nome;
   el("txt-papel").textContent = PAPEL_LEGIVEL[convite.papel] ?? convite.papel;
-  el("email").value = convite.email;
+  el("email").value = conviteEmail;
   el("form-area").classList.remove("oculto");
 })();
 
@@ -102,25 +118,58 @@ function mostrarInvalido(msg) {
 
 el("btn-confirmar").addEventListener("click", async () => {
   el("erro-form").textContent = "";
+  const email = el("email").value.trim().toLowerCase();
   const senha = el("senha").value;
   const senha2 = el("senha2").value;
+
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { el("erro-form").textContent = "Informe um e-mail válido."; return; }
 
   if (senha.length < 8) { el("erro-form").textContent = "A senha precisa ter pelo menos 8 caracteres."; return; }
   if (senha !== senha2) { el("erro-form").textContent = "As senhas não coincidem."; return; }
 
   el("btn-confirmar").disabled = true;
-  const { error } = await sb.auth.signUp({ email: conviteEmail, password: senha });
+  const { data, error } = await sb.auth.signUp({ email, password: senha, options: { data: { convite_token: token } } });
   el("btn-confirmar").disabled = false;
 
-  if (error) {
-    el("erro-form").textContent = "Falha ao criar acesso: " + error.message +
-      (error.message?.toLowerCase().includes("already") ? " — se você já tem conta, use \"Esqueci minha senha\" na tela de login." : "");
+  // Conta já existe: o Supabase devolve erro "already registered" ou um usuário sem identidades.
+  const jaExiste = (error && /already|registered|exists/i.test(error.message || "")) ||
+                   (!error && data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0);
+  if (jaExiste) {
+    conviteEmail = email;
+    el("form-area").classList.add("oculto");
+    el("login-area").classList.remove("oculto");
+    return;
+  }
+  if (error) { el("erro-form").textContent = "Falha ao criar acesso: " + error.message; return; }
+
+  if (data?.session) {
+    // Confirmação de e-mail desligada: já entrou — garante o vínculo do convite.
+    await sb.rpc("aceitar_convite", { p_token: token });
+    el("form-area").classList.add("oculto");
+    el("vinculado").classList.remove("oculto");
     return;
   }
 
   el("form-area").classList.add("oculto");
-  el("txt-email-sucesso").textContent = conviteEmail;
+  el("txt-email-sucesso").textContent = email;
   el("sucesso").classList.remove("oculto");
+});
+
+el("btn-entrar").addEventListener("click", async () => {
+  el("erro-login").textContent = "";
+  el("btn-entrar").disabled = true;
+  const { error } = await sb.auth.signInWithPassword({ email: conviteEmail, password: el("senha-login").value });
+  if (error) {
+    el("btn-entrar").disabled = false;
+    el("erro-login").textContent = /invalid/i.test(error.message) ? "Senha incorreta. Se esqueceu, use \"Esqueci minha senha\" no app." : error.message;
+    return;
+  }
+  const { error: e2 } = await sb.rpc("aceitar_convite", { p_token: token });
+  await sb.auth.signOut();
+  el("btn-entrar").disabled = false;
+  if (e2) { el("erro-login").textContent = e2.message; return; }
+  el("login-area").classList.add("oculto");
+  el("vinculado").classList.remove("oculto");
 });
 </script>
 </body>
